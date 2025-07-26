@@ -2,6 +2,10 @@ use std::io;
 
 pub const RAM_LENGTH: usize = 4096;
 type BlueRegister = u16;
+const FLAG_ZERO: BlueRegister = 0b0001;
+const FLAG_CARRY: BlueRegister = 0b0010;
+const FLAG_OVERFLOW: BlueRegister = 0b0100;
+const FLAG_NEGATIVE: BlueRegister = 0b1000;
 
 #[derive(Debug, PartialEq, Eq)]
 enum State {
@@ -28,7 +32,6 @@ pub struct BlueComputer {
     debug: DebugSettings,
     io: IoState,
     power: bool,
-
     pc: BlueRegister,
     a: BlueRegister,
     z: BlueRegister,
@@ -40,6 +43,7 @@ pub struct BlueComputer {
     dsl: BlueRegister,
     dil: BlueRegister,
     dol: BlueRegister,
+    flags: BlueRegister,
     clock_pulse: u8,
     breakpoints: Vec<BlueRegister>,
 }
@@ -63,6 +67,8 @@ enum Instruction {
     Ral,
     Csa,
     Nop,
+    Sub,
+    Cmp,
 }
 
 impl From<u16> for Instruction {
@@ -84,6 +90,8 @@ impl From<u16> for Instruction {
             13 => Instruction::Ral,
             14 => Instruction::Csa,
             15 => Instruction::Nop,
+            16 => Instruction::Sub,
+            17 => Instruction::Cmp,
             _ => panic!("Invalid instruction"),
         }
     }
@@ -114,6 +122,7 @@ impl BlueComputer {
             dsl: 0,
             dil: 0,
             dol: 0,
+            flags: 0,
             clock_pulse: 0,
             breakpoints: Vec::new(),
         }
@@ -141,6 +150,23 @@ impl BlueComputer {
         }
     }
 
+    fn set_flags(&mut self, result: BlueRegister, carry: bool, overflow: bool) {
+        self.flags = 0;
+
+        if result == 0 {
+            self.flags |= FLAG_ZERO;
+        }
+        if carry {
+            self.flags |= FLAG_CARRY;
+        }
+        if overflow {
+            self.flags |= FLAG_OVERFLOW;
+        }
+        if result & 0x8000 != 0 {
+            self.flags |= FLAG_NEGATIVE;
+        }
+    }
+
     fn do_add(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -159,12 +185,22 @@ impl BlueComputer {
                 }
                 3 => self.mbr = self.ram[self.mar as usize],
                 6 => {
-                    let result = u32::from(self.z) + u32::from(self.mbr);
-                    if (self.z & 0x8000 != 0) && (self.mbr & 0x8000 != 0) && (result & 0x8000 == 0)
-                    {
+                    let z = u32::from(self.z);
+                    let m = u32::from(self.mbr);
+                    let result = z + m;
+
+                    self.a = u16::try_from(result).unwrap();
+
+                    let z_s = i32::from(self.z);
+                    let m_s = i32::from(self.mbr);
+                    let result_s = z_s.wrapping_add(m_s);
+                    let overflow = ((z_s ^ result_s) & 0x8000 != 0) && ((z_s ^ m_s) & 0x8000 == 0);
+                    let carry = result > 0xFFFF;
+
+                    self.set_flags(self.a, carry, overflow);
+                    if overflow {
                         self.power = false;
                     }
-                    self.a = u16::try_from(result).unwrap();
                 }
                 7 => {
                     self.mar = self.pc;
@@ -192,7 +228,10 @@ impl BlueComputer {
                     self.mbr = 0;
                 }
                 3 => self.mbr = self.ram[self.mar as usize],
-                6 => self.a = self.z ^ self.mbr,
+                6 => {
+                    self.a = self.z ^ self.mbr;
+                    self.set_flags(self.a, false, false);
+                }
                 7 => {
                     self.mar = self.pc;
                     self.state = State::Fetch;
@@ -219,7 +258,10 @@ impl BlueComputer {
                     self.mbr = 0;
                 }
                 3 => self.mbr = self.ram[self.mar as usize],
-                6 => self.a = self.z & self.mbr,
+                6 => {
+                    self.a = self.z & self.mbr;
+                    self.set_flags(self.a, false, false);
+                }
                 7 => {
                     self.mar = self.pc;
                     self.state = State::Fetch;
@@ -246,7 +288,10 @@ impl BlueComputer {
                     self.mbr = 0;
                 }
                 3 => self.mbr = self.ram[self.mar as usize],
-                6 => self.a = self.z | self.mbr,
+                6 => {
+                    self.a = self.z | self.mbr;
+                    self.set_flags(self.a, false, false);
+                }
                 7 => {
                     self.mar = self.pc;
                     self.state = State::Fetch;
@@ -457,6 +502,75 @@ impl BlueComputer {
         }
     }
 
+    fn do_sub(&mut self, tick: u8) {
+        match self.state {
+            State::Fetch => match tick {
+                5 => self.z = 0,
+                6 => self.z = self.a,
+                7 => {
+                    self.mar = self.ir & 0x0FFF;
+                    self.state = State::Execute;
+                }
+                _ => (),
+            },
+            State::Execute => match tick {
+                2 => {
+                    self.a = 0;
+                    self.mbr = 0;
+                }
+                3 => self.mbr = self.ram[self.mar as usize],
+                6 => {
+                    let z = i32::from(self.z);
+                    let m = i32::from(self.mbr);
+                    let result = z.wrapping_sub(m);
+                    self.a = u16::try_from(result).unwrap();
+
+                    let carry = (z as u32) < (m as u32);
+                    let overflow = ((z ^ m) & 0x8000 != 0) && ((z ^ result) & 0x8000 != 0);
+
+                    self.set_flags(self.a, carry, overflow);
+                }
+                7 => {
+                    self.mar = self.pc;
+                    self.state = State::Fetch;
+                }
+                _ => (),
+            },
+        }
+    }
+
+    fn do_cmp(&mut self, tick: u8) {
+        match self.state {
+            State::Fetch => match tick {
+                5 => self.z = 0,
+                6 => self.z = self.a,
+                7 => {
+                    self.mar = self.ir & 0x0FFF;
+                    self.state = State::Execute;
+                }
+                _ => (),
+            },
+            State::Execute => match tick {
+                3 => self.mbr = self.ram[self.mar as usize],
+                6 => {
+                    let z = self.z as i32;
+                    let m = self.mbr as i32;
+                    let result = z.wrapping_sub(m) as u16;
+
+                    let carry = (z as u32) < (m as u32);
+                    let overflow = ((z ^ m) & 0x8000 != 0) && ((z ^ result as i32) & 0x8000 != 0);
+
+                    self.set_flags(result, carry, overflow);
+                }
+                7 => {
+                    self.mar = self.pc;
+                    self.state = State::Fetch;
+                }
+                _ => (),
+            },
+        }
+    }
+
     fn process_tick(&mut self, tick: u8) {
         match tick {
             2 => {
@@ -500,6 +614,8 @@ impl BlueComputer {
             Instruction::Ral => self.do_ral(tick),
             Instruction::Csa => self.do_csa(tick),
             Instruction::Nop => self.do_nop(tick),
+            Instruction::Sub => self.do_sub(tick),
+            Instruction::Cmp => self.do_cmp(tick),
         }
     }
 

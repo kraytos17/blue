@@ -1,79 +1,129 @@
+//! # Blue Computer Emulator
+//!
+//! A cycle-accurate emulator for the 1970 Caxton C. Foster's Blue computer.
+//!
+//! ## Architecture Overview
+//!
+//! The Blue computer is a simple educational processor with:
+//! - 4096 words of RAM (16 bits per word)
+//! - 15-bit signed integers (two's complement) + sign bit
+//! - 4-bit opcode with 12-bit address field
+//! - 8-step clock-driven execution cycle
+
 use std::io;
 
+/// Total memory capacity in words
 pub const RAM_LENGTH: usize = 4096;
-type BlueRegister = u16;
+
+/// Type representing all registers in the Blue computer
+pub type BlueRegister = u16;
+
+// Processor status flags
 const FLAG_ZERO: BlueRegister = 0b0001;
 const FLAG_CARRY: BlueRegister = 0b0010;
 const FLAG_OVERFLOW: BlueRegister = 0b0100;
 const FLAG_NEGATIVE: BlueRegister = 0b1000;
 
+/// Current execution state of the processor
 #[derive(Debug, PartialEq, Eq)]
 enum State {
+    /// Instruction execution phase
     Execute,
+    /// Instruction fetch phase
     Fetch,
 }
 
+/// Debug configuration settings
 #[derive(Debug, Default)]
 pub struct DebugSettings {
+    /// Enable debug mode (interactive commands)
     pub enabled: bool,
+    /// Automatically print registers after each cycle
     pub print_registers: bool,
+    /// Require manual input for I/O operations
     pub manual_input: bool,
 }
 
+/// Current state of I/O operations
 #[derive(Debug, Default)]
 pub struct IoState {
+    /// Whether an I/O transfer is in progress
     pub transfer_active: bool,
+    /// Whether the I/O operation is ready to complete
     pub ready: bool,
 }
 
+/// The complete Blue computer emulator
 #[derive(Debug)]
 pub struct BlueComputer {
+    /// Current processor state (Fetch/Execute)
     state: State,
+    /// Debug configuration
     debug: DebugSettings,
+    /// I/O operation state
     io: IoState,
+    /// Power state (on/off)
     power: bool,
+
+    // Registers
+    /// Program Counter (12-bit effective)
     pc: BlueRegister,
+    /// Accumulator
     a: BlueRegister,
+    /// Temporary calculation register
     z: BlueRegister,
+    /// Console Switch Register
     sr: BlueRegister,
+    /// Memory Address Register
     mar: BlueRegister,
+    /// Memory Buffer Register
     mbr: BlueRegister,
+    /// Instruction Register
     ir: BlueRegister,
+    /// Main memory (4096 words)
     ram: [u16; RAM_LENGTH],
+    /// Device Selector
     dsl: BlueRegister,
+    /// Data Input Register
     dil: BlueRegister,
+    /// Data Output Register
     dol: BlueRegister,
+    /// Processor status flags
     flags: BlueRegister,
+    /// Current clock pulse (0-7)
     clock_pulse: u8,
+    /// Debug breakpoints
     breakpoints: Vec<BlueRegister>,
 }
 
+/// All supported instructions with their numeric opcodes
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 enum Instruction {
-    Hlt = 0,
-    Add,
-    Xor,
-    And,
-    Ior,
-    Not,
-    Lda,
-    Sta,
-    Srj,
-    Jma,
-    Jmp,
-    Inp,
-    Out,
-    Ral,
-    Csa,
-    Nop,
-    Sub,
-    Cmp,
+    Hlt = 0, // Halt the processor
+    Add,     // Add memory to accumulator
+    Xor,     // Bitwise XOR
+    And,     // Bitwise AND
+    Ior,     // Bitwise OR
+    Not,     // Bitwise NOT
+    Lda,     // Load accumulator
+    Sta,     // Store accumulator
+    Srj,     // Subroutine jump
+    Jma,     // Jump if accumulator negative
+    Jmp,     // Unconditional jump
+    Inp,     // Input from device
+    Out,     // Output to device
+    Ral,     // Rotate accumulator left
+    Csa,     // Copy switch register
+    Nop,     // No operation
+    Sub,     // Subtract (extension)
+    Cmp,     // Compare (extension)
 }
 
 impl From<u16> for Instruction {
+    /// Convert a 16-bit word to an Instruction by extracting the opcode
     fn from(value: u16) -> Self {
-        match value {
+        match (value & 0xF000) >> 12 {
             0 => Instruction::Hlt,
             1 => Instruction::Add,
             2 => Instruction::Xor,
@@ -92,12 +142,13 @@ impl From<u16> for Instruction {
             15 => Instruction::Nop,
             16 => Instruction::Sub,
             17 => Instruction::Cmp,
-            _ => panic!("Invalid instruction"),
+            _ => panic!("Invalid instruction opcode"),
         }
     }
 }
 
 impl BlueComputer {
+    /// Create a new Blue computer instance with all registers zeroed
     pub fn new() -> Self {
         Self {
             state: State::Fetch,
@@ -128,28 +179,24 @@ impl BlueComputer {
         }
     }
 
+    /// Power on the computer
     fn press_on(&mut self) {
         println!("Pressed ON");
         self.power = true;
     }
 
+    /// Power off the computer
     fn _press_off(&mut self) {
         println!("Pressed OFF");
         self.power = false;
     }
 
+    /// Get the current instruction from the IR
     fn get_instruction(&self) -> Instruction {
         ((self.ir & 0xF000) >> 12).into()
     }
 
-    fn do_hlt(&mut self, tick: u8) {
-        match tick {
-            6 => self.power = false,
-            7 => self.mar = self.pc,
-            _ => (),
-        }
-    }
-
+    /// Update processor flags based on operation results
     fn set_flags(&mut self, result: BlueRegister, carry: bool, overflow: bool) {
         self.flags = 0;
 
@@ -167,6 +214,19 @@ impl BlueComputer {
         }
     }
 
+    // Instruction implementations
+    // Each follows the 8-step cycle with state-specific behavior
+
+    /// HLT instruction - halt the processor
+    fn do_hlt(&mut self, tick: u8) {
+        match tick {
+            6 => self.power = false,
+            7 => self.mar = self.pc,
+            _ => (),
+        }
+    }
+
+    /// ADD instruction - add memory to accumulator
     fn do_add(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -211,6 +271,7 @@ impl BlueComputer {
         }
     }
 
+    /// XOR instruction - bitwise exclusive OR
     fn do_xor(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -241,6 +302,7 @@ impl BlueComputer {
         }
     }
 
+    /// AND instruction - bitwise AND
     fn do_and(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -271,6 +333,7 @@ impl BlueComputer {
         }
     }
 
+    /// IOR instruction - bitwise inclusive OR
     fn do_ior(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -301,6 +364,7 @@ impl BlueComputer {
         }
     }
 
+    /// NOT instruction - bitwise complement
     fn do_not(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -321,6 +385,7 @@ impl BlueComputer {
         }
     }
 
+    /// LDA instruction - load accumulator from memory
     fn do_lda(&mut self, tick: u8) {
         match self.state {
             State::Fetch => {
@@ -345,6 +410,7 @@ impl BlueComputer {
         }
     }
 
+    /// STA instruction - store accumulator to memory
     fn do_sta(&mut self, tick: u8) {
         match self.state {
             State::Fetch => {
@@ -368,6 +434,7 @@ impl BlueComputer {
         }
     }
 
+    /// SRJ instruction - subroutine jump
     fn do_srj(&mut self, tick: u8) {
         match tick {
             5 => self.a = self.pc & 0x0FFF,
@@ -380,6 +447,7 @@ impl BlueComputer {
         }
     }
 
+    /// JMA instruction - jump if accumulator negative
     fn do_jma(&mut self, tick: u8) {
         match tick {
             5 => {
@@ -397,6 +465,7 @@ impl BlueComputer {
         }
     }
 
+    /// JMP instruction - unconditional jump
     fn do_jmp(&mut self, tick: u8) {
         match tick {
             5 => self.pc = 0,
@@ -406,6 +475,7 @@ impl BlueComputer {
         }
     }
 
+    /// INP instruction - input from device
     fn do_inp(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -439,6 +509,7 @@ impl BlueComputer {
         }
     }
 
+    /// OUT instruction - output to device
     fn do_out(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -467,6 +538,7 @@ impl BlueComputer {
         }
     }
 
+    /// RAL instruction - rotate accumulator left
     fn do_ral(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -487,6 +559,7 @@ impl BlueComputer {
         }
     }
 
+    /// CSA instruction - copy switch register to accumulator
     fn do_csa(&mut self, tick: u8) {
         match tick {
             5 => self.a = 0,
@@ -496,12 +569,14 @@ impl BlueComputer {
         }
     }
 
+    /// NOP instruction - no operation
     fn do_nop(&mut self, tick: u8) {
         if tick == 7 {
             self.mar = self.pc;
         }
     }
 
+    /// SUB instruction - subtract memory from accumulator (extension)
     fn do_sub(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -539,6 +614,7 @@ impl BlueComputer {
         }
     }
 
+    /// CMP instruction - compare memory with accumulator (extension)
     fn do_cmp(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
@@ -571,7 +647,9 @@ impl BlueComputer {
         }
     }
 
+    /// Process a single clock tick (0-7)
     fn process_tick(&mut self, tick: u8) {
+        // Common fetch cycle operations
         match tick {
             2 => {
                 if self.state == State::Fetch {
@@ -597,6 +675,7 @@ impl BlueComputer {
             _ => (),
         }
 
+        // Dispatch to current instruction handler
         match self.get_instruction() {
             Instruction::Hlt => self.do_hlt(tick),
             Instruction::Add => self.do_add(tick),
@@ -619,6 +698,7 @@ impl BlueComputer {
         }
     }
 
+    /// Handle I/O operations based on current instruction
     fn handle_io(&mut self) {
         match self.get_instruction() {
             Instruction::Inp => {
@@ -654,6 +734,7 @@ impl BlueComputer {
         }
     }
 
+    /// Execute a full 8-tick cycle
     fn emulate_cycle(&mut self) {
         while self.clock_pulse < 8 {
             self.process_tick(self.clock_pulse);
@@ -662,6 +743,7 @@ impl BlueComputer {
         self.clock_pulse = 0;
     }
 
+    /// Display all register values in hexadecimal
     fn dump_registers(&self) {
         println!(
             "PC: {:04x} A: {:04x} IR: {:04x} Z: {:04x} MAR: {:04x} MBR: {:04x} DSL: {:02x} DIL: {:02x} DOL: {:02x}",
@@ -677,6 +759,7 @@ impl BlueComputer {
         );
     }
 
+    /// Display the entire RAM contents
     fn dump_ram(&self) {
         println!("==== RAM ====\n0000: ");
         for (i, word) in self.ram.iter().enumerate() {
@@ -688,6 +771,17 @@ impl BlueComputer {
         println!();
     }
 
+    /// Run a program loaded into memory
+    ///
+    /// # Arguments
+    /// * `program` - A slice of 16-bit words containing the program code
+    ///
+    /// # Example
+    /// ```
+    /// let mut computer = BlueComputer::new();
+    /// let program = [0x6010, 0x1011, 0x0000]; // LDA, ADD, HLT
+    /// computer.run_program(&program);
+    /// ```
     pub fn run_program(&mut self, program: &[u16]) {
         println!("Copying program to the RAM");
         self.ram.copy_from_slice(&[0; RAM_LENGTH]);

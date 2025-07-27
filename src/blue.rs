@@ -120,36 +120,38 @@ enum Instruction {
     Cmp,     // Compare (extension)
 }
 
-impl From<u16> for Instruction {
-    /// Convert a 16-bit word to an Instruction by extracting the opcode
-    fn from(value: u16) -> Self {
+impl TryFrom<u16> for Instruction {
+    type Error = &'static str;
+
+    /// Try to convert a 16-bit word to an Instruction by extracting the opcode
+    fn try_from(value: u16) -> Result<Self, Self::Error> {
         match (value & 0xF000) >> 12 {
-            0 => Instruction::Hlt,
-            1 => Instruction::Add,
-            2 => Instruction::Xor,
-            3 => Instruction::And,
-            4 => Instruction::Ior,
-            5 => Instruction::Not,
-            6 => Instruction::Lda,
-            7 => Instruction::Sta,
-            8 => Instruction::Srj,
-            9 => Instruction::Jma,
-            10 => Instruction::Jmp,
-            11 => Instruction::Inp,
-            12 => Instruction::Out,
-            13 => Instruction::Ral,
-            14 => Instruction::Csa,
-            15 => Instruction::Nop,
-            16 => Instruction::Sub,
-            17 => Instruction::Cmp,
-            _ => panic!("Invalid instruction opcode"),
+            0 => Ok(Self::Hlt),
+            1 => Ok(Self::Add),
+            2 => Ok(Self::Xor),
+            3 => Ok(Self::And),
+            4 => Ok(Self::Ior),
+            5 => Ok(Self::Not),
+            6 => Ok(Self::Lda),
+            7 => Ok(Self::Sta),
+            8 => Ok(Self::Srj),
+            9 => Ok(Self::Jma),
+            10 => Ok(Self::Jmp),
+            11 => Ok(Self::Inp),
+            12 => Ok(Self::Out),
+            13 => Ok(Self::Ral),
+            14 => Ok(Self::Csa),
+            15 => Ok(Self::Nop),
+            16 => Ok(Self::Sub),
+            17 => Ok(Self::Cmp),
+            _ => Err("Invalid instruction opcode"),
         }
     }
 }
 
 impl BlueComputer {
     /// Create a new Blue computer instance with all registers zeroed
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             state: State::Fetch,
             debug: DebugSettings {
@@ -193,11 +195,11 @@ impl BlueComputer {
 
     /// Get the current instruction from the IR
     fn get_instruction(&self) -> Instruction {
-        ((self.ir & 0xF000) >> 12).into()
+        ((self.ir & 0xF000) >> 12).try_into().unwrap()
     }
 
     /// Update processor flags based on operation results
-    fn set_flags(&mut self, result: BlueRegister, carry: bool, overflow: bool) {
+    const fn set_flags(&mut self, result: BlueRegister, carry: bool, overflow: bool) {
         self.flags = 0;
 
         if result == 0 {
@@ -218,7 +220,7 @@ impl BlueComputer {
     // Each follows the 8-step cycle with state-specific behavior
 
     /// HLT instruction - halt the processor
-    fn do_hlt(&mut self, tick: u8) {
+    const fn do_hlt(&mut self, tick: u8) {
         match tick {
             6 => self.power = false,
             7 => self.mar = self.pc,
@@ -272,7 +274,7 @@ impl BlueComputer {
     }
 
     /// XOR instruction - bitwise exclusive OR
-    fn do_xor(&mut self, tick: u8) {
+    const fn do_xor(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
                 5 => self.z = 0,
@@ -303,7 +305,7 @@ impl BlueComputer {
     }
 
     /// AND instruction - bitwise AND
-    fn do_and(&mut self, tick: u8) {
+    const fn do_and(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
                 5 => self.z = 0,
@@ -334,7 +336,7 @@ impl BlueComputer {
     }
 
     /// IOR instruction - bitwise inclusive OR
-    fn do_ior(&mut self, tick: u8) {
+    const fn do_ior(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
                 5 => self.z = 0,
@@ -365,7 +367,7 @@ impl BlueComputer {
     }
 
     /// NOT instruction - bitwise complement
-    fn do_not(&mut self, tick: u8) {
+    const fn do_not(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
                 5 => self.z = 0,
@@ -386,7 +388,7 @@ impl BlueComputer {
     }
 
     /// LDA instruction - load accumulator from memory
-    fn do_lda(&mut self, tick: u8) {
+    const fn do_lda(&mut self, tick: u8) {
         match self.state {
             State::Fetch => {
                 if tick == 7 {
@@ -411,7 +413,7 @@ impl BlueComputer {
     }
 
     /// STA instruction - store accumulator to memory
-    fn do_sta(&mut self, tick: u8) {
+    const fn do_sta(&mut self, tick: u8) {
         match self.state {
             State::Fetch => {
                 if tick == 7 {
@@ -435,7 +437,7 @@ impl BlueComputer {
     }
 
     /// SRJ instruction - subroutine jump
-    fn do_srj(&mut self, tick: u8) {
+    const fn do_srj(&mut self, tick: u8) {
         match tick {
             5 => self.a = self.pc & 0x0FFF,
             6 => self.pc = 0,
@@ -448,7 +450,7 @@ impl BlueComputer {
     }
 
     /// JMA instruction - jump if accumulator negative
-    fn do_jma(&mut self, tick: u8) {
+    const fn do_jma(&mut self, tick: u8) {
         match tick {
             5 => {
                 if (self.a & 0x8000) != 0 {
@@ -466,7 +468,7 @@ impl BlueComputer {
     }
 
     /// JMP instruction - unconditional jump
-    fn do_jmp(&mut self, tick: u8) {
+    const fn do_jmp(&mut self, tick: u8) {
         match tick {
             5 => self.pc = 0,
             6 => self.pc = self.ir & 0x0FFF,
@@ -476,7 +478,7 @@ impl BlueComputer {
     }
 
     /// INP instruction - input from device
-    fn do_inp(&mut self, tick: u8) {
+    const fn do_inp(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
                 5 => {
@@ -510,7 +512,7 @@ impl BlueComputer {
     }
 
     /// OUT instruction - output to device
-    fn do_out(&mut self, tick: u8) {
+    const fn do_out(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
                 5 => {
@@ -539,7 +541,7 @@ impl BlueComputer {
     }
 
     /// RAL instruction - rotate accumulator left
-    fn do_ral(&mut self, tick: u8) {
+    const fn do_ral(&mut self, tick: u8) {
         match self.state {
             State::Fetch => match tick {
                 5 => self.z = 0,
@@ -560,7 +562,7 @@ impl BlueComputer {
     }
 
     /// CSA instruction - copy switch register to accumulator
-    fn do_csa(&mut self, tick: u8) {
+    const fn do_csa(&mut self, tick: u8) {
         match tick {
             5 => self.a = 0,
             6 => self.a = self.sr,
@@ -570,7 +572,7 @@ impl BlueComputer {
     }
 
     /// NOP instruction - no operation
-    fn do_nop(&mut self, tick: u8) {
+    const fn do_nop(&mut self, tick: u8) {
         if tick == 7 {
             self.mar = self.pc;
         }
@@ -629,12 +631,13 @@ impl BlueComputer {
             State::Execute => match tick {
                 3 => self.mbr = self.ram[self.mar as usize],
                 6 => {
-                    let z = self.z as i32;
-                    let m = self.mbr as i32;
-                    let result = z.wrapping_sub(m) as u16;
+                    let z = i32::from(self.z);
+                    let m = i32::from(self.mbr);
+                    let result = u16::try_from(z.wrapping_sub(m)).unwrap();
 
                     let carry = (z as u32) < (m as u32);
-                    let overflow = ((z ^ m) & 0x8000 != 0) && ((z ^ result as i32) & 0x8000 != 0);
+                    let overflow =
+                        ((z ^ m) & 0x8000 != 0) && ((z ^ i32::from(result)) & 0x8000 != 0);
 
                     self.set_flags(result, carry, overflow);
                 }

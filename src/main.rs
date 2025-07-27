@@ -38,7 +38,7 @@ fn main() {
     if args.len() >= 2 {
         let test_name = &args[1];
         if let Some((_, filename)) = test_programs.iter().find(|(name, _)| name == test_name) {
-            println!("Running test program: {}", test_name);
+            println!("Running test program: {test_name}");
             let test_program = load_program_file(filename);
             program_data[..test_program.len()].copy_from_slice(&test_program);
         } else {
@@ -48,7 +48,7 @@ fn main() {
                     println!("Failed to open program file: {e}");
                     println!("Available test programs:");
                     for (name, _) in &test_programs {
-                        println!("  {}", name);
+                        println!("  {name}");
                     }
                     return;
                 }
@@ -74,7 +74,7 @@ fn main() {
     } else {
         println!("No program specified. Available test programs:");
         for (name, _) in &test_programs {
-            println!("  {}", name);
+            println!("  {name}");
         }
         println!("Usage: {} <test_name|file>", args[0]);
         return;

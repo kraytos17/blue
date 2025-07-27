@@ -98,7 +98,7 @@ The Blue computer supports 16 instructions with enum-based implementation:
 ## Getting Started
 
 ### Prerequisites
-- Rust 1.70+ (2021 edition)
+- Rust 1.85+ (2024 edition)
 - Basic understanding of computer architecture
 - Familiarity with hexadecimal notation
 
